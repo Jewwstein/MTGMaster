@@ -1,0 +1,150 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// NextAuth models (Prisma Adapter)
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  username      String    @unique
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  hashedPassword String?
+
+  accounts      Account[]
+  sessions      Session[]
+
+  decks         Deck[]
+  gamePlayers   GamePlayer[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// App models
+model Deck {
+  id        String   @id @default(cuid())
+  ownerId   String
+  name      String
+  format    String   @default("commander")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  cards DeckCard[]
+}
+
+model DeckCard {
+  id        String  @id @default(cuid())
+  deckId    String
+  // Scryfall IDs where available
+  scryfallId String?
+  name      String
+  quantity  Int     @default(1)
+  isCommander Boolean @default(false)
+  isCompanion Boolean @default(false)
+
+  deck Deck @relation(fields: [deckId], references: [id], onDelete: Cascade)
+}
+
+// Cache minimal card data for performance and offline resilience
+model CardCache {
+  scryfallId String  @id
+  name       String
+  manaCost   String?
+  typeLine   String?
+  oracleText String?
+  imageSmall String?
+  imageNormal String?
+  colorIdentity String?
+  cmc        Float?
+  updatedAt  DateTime @updatedAt
+}
+
+// Game state persistence
+model Game {
+  id         String   @id @default(cuid())
+  roomCode   String   @unique
+  name       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  status     String   @default("active") // active, finished
+  // Store normalized state minimal snapshot for quick reconnection
+  stateJson  String   // JSON blob of current public game state
+
+  players    GamePlayer[]
+  events     GameEvent[]
+}
+
+model GamePlayer {
+  id         String  @id @default(cuid())
+  gameId     String
+  userId     String?
+  seat       Int
+  displayName String
+  lifeTotal  Int     @default(40)
+  poison     Int     @default(0)
+  commanderTaxJson String @default("{}")
+  commanderDamageJson String @default("{}") // per-opponent map
+  zonesJson  String  // private zones like hand (encrypted optionally later)
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  @@unique([gameId, seat])
+}
+
+model GameEvent {
+  id        String   @id @default(cuid())
+  gameId    String
+  index     Int
+  createdAt DateTime @default(now())
+  kind      String
+  payload   String   // JSON for the event
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, index])
+}

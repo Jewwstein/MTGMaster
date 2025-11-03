@@ -219,6 +219,23 @@ function syncPlayersFromZones(
   return out;
 }
 
+function cloneZones(zonesIn: Record<ZoneId, CardItem[]>): Record<ZoneId, CardItem[]> {
+  const out = {} as Record<ZoneId, CardItem[]>;
+  for (const zone of Object.keys(zonesIn) as ZoneId[]) {
+    out[zone] = zonesIn[zone].map((card) => ({ ...card }));
+  }
+  return out;
+}
+
+function shuffleCards(cards: CardItem[]): CardItem[] {
+  const out = [...cards];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 export const PHASES = [
   "Untap",
   "Upkeep",
@@ -375,6 +392,107 @@ export const useGame = create<GameState>((set, get) => ({
       const players = syncPlayersFromZones(state.players, zonesOut, state.mySeat);
       return { zones: zonesOut, players } as any;
     }),
+  toggleTap: (cardId) =>
+    set((state) => {
+      const zones = cloneZones(state.zones as Record<ZoneId, CardItem[]>);
+      let changed = false;
+      for (const zone of Object.keys(zones) as ZoneId[]) {
+        zones[zone] = zones[zone].map((card) => {
+          if (card.id !== cardId) return card;
+          changed = true;
+          return { ...card, tapped: !card.tapped };
+        });
+        if (changed) break;
+      }
+      if (!changed) return {} as any;
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  incCounter: (cardId, delta) =>
+    set((state) => {
+      const zones = cloneZones(state.zones as Record<ZoneId, CardItem[]>);
+      let changed = false;
+      for (const zone of Object.keys(zones) as ZoneId[]) {
+        zones[zone] = zones[zone].map((card) => {
+          if (card.id !== cardId) return card;
+          changed = true;
+          const next = Math.max(0, (card.counters ?? 0) + delta);
+          if (next === 0) {
+            const { counters, ...rest } = card;
+            return rest;
+          }
+          return { ...card, counters: next };
+        });
+        if (changed) break;
+      }
+      if (!changed) return {} as any;
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  toggleLabel: (cardId, label) =>
+    set((state) => {
+      const cleanLabel = typeof label === "string" ? label.trim() : "";
+      if (!cleanLabel) return {} as any;
+      const zones = cloneZones(state.zones as Record<ZoneId, CardItem[]>);
+      let changed = false;
+      for (const zone of Object.keys(zones) as ZoneId[]) {
+        zones[zone] = zones[zone].map((card) => {
+          if (card.id !== cardId) return card;
+          changed = true;
+          const current = Array.isArray(card.labels) ? [...card.labels] : [];
+          const idx = current.findIndex((entry) => entry === cleanLabel);
+          if (idx === -1) current.push(cleanLabel);
+          else current.splice(idx, 1);
+          return current.length > 0 ? { ...card, labels: current } : (() => {
+            const { labels, ...rest } = card;
+            return rest;
+          })();
+        });
+        if (changed) break;
+      }
+      if (!changed) return {} as any;
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  moveAnyToLibraryTop: (cardId) =>
+    set((state) => {
+      const zones = cloneZones(state.zones as Record<ZoneId, CardItem[]>);
+      let moved: CardItem | null = null;
+      for (const zone of Object.keys(zones) as ZoneId[]) {
+        const idx = zones[zone].findIndex((card) => card.id === cardId);
+        if (idx !== -1) {
+          const [card] = zones[zone].splice(idx, 1);
+          moved = zone === "battlefield" ? { ...card, x: undefined, y: undefined } : { ...card };
+          break;
+        }
+      }
+      if (!moved) return {} as any;
+      zones.library = [moved, ...zones.library.filter((card) => card.id !== cardId)];
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  moveAnyToLibraryBottom: (cardId) =>
+    set((state) => {
+      const zones = cloneZones(state.zones as Record<ZoneId, CardItem[]>);
+      let moved: CardItem | null = null;
+      for (const zone of Object.keys(zones) as ZoneId[]) {
+        const idx = zones[zone].findIndex((card) => card.id === cardId);
+        if (idx !== -1) {
+          const [card] = zones[zone].splice(idx, 1);
+          moved = zone === "battlefield" ? { ...card, x: undefined, y: undefined } : { ...card };
+          break;
+        }
+      }
+      if (!moved) return {} as any;
+      zones.library = zones.library.filter((card) => card.id !== cardId);
+      zones.library.push(moved);
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  moveTopLibraryToBottom: () =>
+    set((state) => {
+      if (state.zones.library.length === 0) return {} as any;
+      const zones = cloneZones(state.zones as Record<ZoneId, CardItem[]>);
+      const top = zones.library.shift();
+      if (!top) return {} as any;
+      zones.library.push(top);
+      return applyZonesWithSync(state as GameState, zones);
+    }),
   addToken: (name = "Token", to: ZoneId = "battlefield") =>
     set((state) => {
       const seat = state.mySeat;
@@ -393,6 +511,97 @@ export const useGame = create<GameState>((set, get) => ({
       const zonesOut = normalizeZones({ ...zones, [to]: [...zones[to], { id: uid(), name, token: true }] });
       const players = syncPlayersFromZones(state.players, zonesOut, state.mySeat);
       return { zones: zonesOut, players } as any;
+    }),
+  moveToZone: (cardId, to) =>
+    set((state) => {
+      const zones = cloneZones(state.zones as Record<ZoneId, CardItem[]>);
+      let moved: CardItem | null = null;
+      for (const zone of Object.keys(zones) as ZoneId[]) {
+        const idx = zones[zone].findIndex((card) => card.id === cardId);
+        if (idx !== -1) {
+          const [card] = zones[zone].splice(idx, 1);
+          moved = zone === "battlefield" ? { ...card, x: undefined, y: undefined } : { ...card };
+          break;
+        }
+      }
+      if (!moved) return {} as any;
+      zones[to] = [...zones[to].filter((card) => card.id !== cardId), moved];
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  putOnTopLibrary: (cardId) => (get().moveAnyToLibraryTop(cardId)),
+  putOnBottomLibrary: (cardId) => (get().moveAnyToLibraryBottom(cardId)),
+  drawSeven: () =>
+    set((state) => {
+      const zones = cloneZones(state.zones as Record<ZoneId, CardItem[]>);
+      const hand: CardItem[] = [];
+      const library = [...zones.library];
+      for (let i = 0; i < 7 && library.length > 0; i++) {
+        hand.push(library.shift()!);
+      }
+      zones.library = library;
+      zones.hand = hand;
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  mulliganLondon: (bottomCount) =>
+    set((state) => {
+      const library = [...state.zones.library, ...state.zones.hand.map((card) => ({ ...card, x: undefined, y: undefined }))];
+      const shuffled = shuffleCards(library);
+      const hand = shuffled.splice(0, 7);
+      const bottom = Math.max(0, Math.min(bottomCount ?? 0, hand.length));
+      const keptHand = hand.slice(0, hand.length - bottom);
+      const toBottom = hand.slice(hand.length - bottom);
+      const zones: Record<ZoneId, CardItem[]> = {
+        ...state.zones,
+        library: [...shuffled, ...toBottom],
+        hand: keptHand,
+        battlefield: state.zones.battlefield.map((card) => ({ ...card })),
+        lands: state.zones.lands.map((card) => ({ ...card })),
+        graveyard: state.zones.graveyard.map((card) => ({ ...card })),
+        exile: state.zones.exile.map((card) => ({ ...card })),
+        command: state.zones.command.map((card) => ({ ...card })),
+      } as Record<ZoneId, CardItem[]>;
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  mulliganSevenForSeven: () =>
+    set((state) => {
+      const library = [...state.zones.library, ...state.zones.hand.map((card) => ({ ...card, x: undefined, y: undefined }))];
+      const shuffled = shuffleCards(library);
+      const hand = shuffled.splice(0, 7);
+      const zones: Record<ZoneId, CardItem[]> = {
+        ...state.zones,
+        library: shuffled,
+        hand,
+        battlefield: state.zones.battlefield.map((card) => ({ ...card })),
+        lands: state.zones.lands.map((card) => ({ ...card })),
+        graveyard: state.zones.graveyard.map((card) => ({ ...card })),
+        exile: state.zones.exile.map((card) => ({ ...card })),
+        command: state.zones.command.map((card) => ({ ...card })),
+      } as Record<ZoneId, CardItem[]>;
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  untapAll: () =>
+    set((state) => {
+      const zones = cloneZones(state.zones as Record<ZoneId, CardItem[]>);
+      for (const zone of Object.keys(zones) as ZoneId[]) {
+        zones[zone] = zones[zone].map((card) => (card.tapped ? { ...card, tapped: false } : card));
+      }
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  incLife: (n) =>
+    set((state) => ({ life: state.life + n } as any)),
+  incPoison: (n) =>
+    set((state) => ({ poison: Math.max(0, state.poison + n) } as any)),
+  incCommanderTax: (n) =>
+    set((state) => ({ commanderTaxCount: Math.max(0, state.commanderTaxCount + n) } as any)),
+  incCommanderDamage: (opponent, n) =>
+    set((state) => {
+      if (typeof opponent !== "string" || !opponent.trim() || typeof n !== "number") {
+        return {} as any;
+      }
+      const key = opponent.trim();
+      const current = state.commanderDamage[key] ?? 0;
+      const next = Math.max(0, current + n);
+      return { commanderDamage: { ...state.commanderDamage, [key]: next } } as any;
     }),
   snapshot: () => {
     const s = get();

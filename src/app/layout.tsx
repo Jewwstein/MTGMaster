@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Cinzel_Decorative } from "next/font/google";
 import "./globals.css";
 import SessionProviderClient from "../components/session-provider";
 import PreviewProvider from "../components/tabletop/PreviewProvider";
@@ -14,6 +14,12 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const cinzel = Cinzel_Decorative({
+  variable: "--font-mtgmasters",
+  subsets: ["latin"],
+  weight: ["400", "700"],
+});
+
 export const metadata: Metadata = {
   title: "MTGMasters",
   description: "Online Commander tabletop with decks and realtime play",
@@ -26,7 +32,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      <body className={`${geistSans.variable} ${geistMono.variable} ${cinzel.variable} antialiased`}>
         <SessionProviderClient>
           <PreviewProvider>{children}</PreviewProvider>
         </SessionProviderClient>

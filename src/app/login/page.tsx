@@ -6,17 +6,31 @@ import { useRouter } from "next/navigation";
 export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
     setLoading(true);
     const res = await signIn("credentials", {
       username,
       redirect: false,
+      callbackUrl: "/dashboard",
     });
     setLoading(false);
-    if (!res || res.error) return;
+    if (!res) {
+      setError("Unable to sign in. Please try again.");
+      return;
+    }
+    if (res.error) {
+      setError(res.error || "Invalid username.");
+      return;
+    }
+    if (res.url) {
+      router.push(res.url);
+      return;
+    }
     router.push("/dashboard");
   }
 
@@ -34,6 +48,7 @@ export default function LoginPage() {
           placeholder="Username"
           className="mt-4 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 outline-none focus:ring-2 focus:ring-amber-500"
         />
+        {error && <p className="mt-3 text-sm text-rose-400">{error}</p>}
         <button
           type="submit"
           disabled={loading || !username}

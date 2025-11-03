@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,21 +7,31 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// NextAuth models (Prisma Adapter)
+model Playmat {
+  id           String   @id @default(cuid())
+  name         String
+  slug         String   @unique
+  filePath     String
+  previewPath  String?
+  isPreset     Boolean  @default(false)
+  uploadedById String?
+  createdAt    DateTime @default(now())
+  uploadedBy   User?    @relation(fields: [uploadedById], references: [id])
+}
+
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  username      String    @unique
-  email         String?   @unique
-  emailVerified DateTime?
-  image         String?
+  id             String       @id @default(cuid())
+  name           String?
+  username       String       @unique
+  email          String?      @unique
+  emailVerified  DateTime?
+  image          String?
   hashedPassword String?
-
-  accounts      Account[]
-  sessions      Session[]
-
-  decks         Deck[]
-  gamePlayers   GamePlayer[]
+  accounts       Account[]
+  decks          Deck[]
+  gamePlayers    GamePlayer[]
+  playmats       Playmat[]
+  sessions       Session[]
 }
 
 model Account {
@@ -40,8 +47,7 @@ model Account {
   scope             String?
   id_token          String?
   session_state     String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
 }
@@ -51,8 +57,7 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model VerificationToken {
@@ -63,75 +68,66 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-// App models
 model Deck {
-  id        String   @id @default(cuid())
+  id        String     @id @default(cuid())
   ownerId   String
   name      String
-  format    String   @default("commander")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  cards DeckCard[]
+  format    String     @default("commander")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  owner     User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  cards     DeckCard[]
 }
 
 model DeckCard {
-  id        String  @id @default(cuid())
-  deckId    String
-  // Scryfall IDs where available
-  scryfallId String?
-  name      String
-  quantity  Int     @default(1)
+  id          String  @id @default(cuid())
+  deckId      String
+  scryfallId  String?
+  name        String
+  quantity    Int     @default(1)
   isCommander Boolean @default(false)
   isCompanion Boolean @default(false)
-
-  deck Deck @relation(fields: [deckId], references: [id], onDelete: Cascade)
+  deck        Deck    @relation(fields: [deckId], references: [id], onDelete: Cascade)
 }
 
-// Cache minimal card data for performance and offline resilience
 model CardCache {
-  scryfallId String  @id
-  name       String
-  manaCost   String?
-  typeLine   String?
-  oracleText String?
-  imageSmall String?
-  imageNormal String?
+  scryfallId    String   @id
+  name          String
+  manaCost      String?
+  typeLine      String?
+  oracleText    String?
+  imageSmall    String?
+  imageNormal   String?
   colorIdentity String?
-  cmc        Float?
-  updatedAt  DateTime @updatedAt
+  cmc           Float?
+  updatedAt     DateTime @updatedAt
 }
 
-// Game state persistence
 model Game {
-  id         String   @id @default(cuid())
-  roomCode   String   @unique
-  name       String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  status     String   @default("active") // active, finished
-  // Store normalized state minimal snapshot for quick reconnection
-  stateJson  String   // JSON blob of current public game state
-
-  players    GamePlayer[]
-  events     GameEvent[]
+  id        String       @id @default(cuid())
+  roomCode  String       @unique
+  name      String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  status    String       @default("active")
+  stateJson String
+  events    GameEvent[]
+  players   GamePlayer[]
 }
 
 model GamePlayer {
-  id         String  @id @default(cuid())
-  gameId     String
-  userId     String?
-  seat       Int
-  displayName String
-  lifeTotal  Int     @default(40)
-  poison     Int     @default(0)
-  commanderTaxJson String @default("{}")
-  commanderDamageJson String @default("{}") // per-opponent map
-  zonesJson  String  // private zones like hand (encrypted optionally later)
-
-  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
-  user User? @relation(fields: [userId], references: [id])
+  id                  String  @id @default(cuid())
+  gameId              String
+  userId              String?
+  seat                Int
+  displayName         String
+  lifeTotal           Int     @default(40)
+  poison              Int     @default(0)
+  commanderTaxJson    String  @default("{}")
+  commanderDamageJson String  @default("{}")
+  zonesJson           String
+  user                User?   @relation(fields: [userId], references: [id])
+  game                Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
 
   @@unique([gameId, seat])
 }
@@ -142,9 +138,8 @@ model GameEvent {
   index     Int
   createdAt DateTime @default(now())
   kind      String
-  payload   String   // JSON for the event
-
-  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  payload   String
+  game      Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
 
   @@unique([gameId, index])
 }

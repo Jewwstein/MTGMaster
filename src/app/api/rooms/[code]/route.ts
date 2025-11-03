@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import prisma from "../../../../lib/prisma";
 
 // GET /api/rooms/[code] -> fetch or create room, return latest snapshot
-export async function GET(_req: Request, { params }: { params: { code: string } }) {
+export async function GET(_req: Request, { params }: { params: Promise<{ code: string }> }) {
   try {
-    const roomCode = params.code.toUpperCase();
+    const { code } = await params;
+    const roomCode = code.toUpperCase();
     let game = await prisma.game.findUnique({ where: { roomCode } });
     if (!game) {
       game = await prisma.game.create({ data: { roomCode, name: roomCode, stateJson: JSON.stringify({}) } });
@@ -16,9 +17,10 @@ export async function GET(_req: Request, { params }: { params: { code: string } 
 }
 
 // POST /api/rooms/[code] -> save snapshot { stateJson }
-export async function POST(req: Request, { params }: { params: { code: string } }) {
+export async function POST(req: Request, { params }: { params: Promise<{ code: string }> }) {
   try {
-    const roomCode = params.code.toUpperCase();
+    const { code } = await params;
+    const roomCode = code.toUpperCase();
     const body = await req.json();
     const stateJson: string = typeof body?.stateJson === "string" ? body.stateJson : JSON.stringify(body?.stateJson ?? {});
     const game = await prisma.game.upsert({

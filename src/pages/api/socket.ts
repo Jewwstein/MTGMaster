@@ -30,6 +30,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
         io.to(roomCode).emit("message", { from: socket.id, payload });
       });
 
+      socket.on("state", (roomCode: string, payload: any) => {
+        if (!roomCode) return;
+        const body = typeof payload === "object" && payload ? { ...payload } : {};
+        body.from = socket.id;
+        io.to(roomCode).emit("state", roomCode, body);
+      });
+
       // Broadcast dice rolls (scoped to room when roomCode provided)
       socket.on("dice", (roomOrPayload: any, maybePayload?: any) => {
         let roomCode: string | null = null;

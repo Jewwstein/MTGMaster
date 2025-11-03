@@ -9,10 +9,12 @@ export default function Card({
   card,
   onClick,
   previewOn = undefined,
+  suppressContextMenu = false,
 }: {
   card: CardItem;
   onClick?: () => void;
   previewOn?: never;
+  suppressContextMenu?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: card.id });
   const [img, setImg] = useState<string | null>(null);
@@ -61,6 +63,24 @@ export default function Card({
           const s2 = await tryMode("fuzzy", nameStr);
           if (s2) return s2;
         } catch {}
+        try {
+          const params = new URLSearchParams({
+            q: `!"${nameStr}"`,
+            order: "released",
+            dir: "desc",
+            unique: "prints",
+          });
+          const res = await fetch(`https://api.scryfall.com/cards/search?${params.toString()}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data?.data)) {
+              for (const entry of data.data) {
+                const src = pick(entry);
+                if (src) return src;
+              }
+            }
+          }
+        } catch {}
         return null;
       };
       try {
@@ -68,7 +88,9 @@ export default function Card({
         if (!src) {
           // fallback: strip common annotations
           const base = key.replace(/\s*\(.*\)\s*$/, "").replace(/\s*\/\/.*$/, "").trim();
-          if (base && base !== key) src = await tryAll(base);
+          if (base && base !== key) {
+            src = await tryAll(base);
+          }
         }
         if (!cancelled) {
           setImg(src);
@@ -89,7 +111,14 @@ export default function Card({
   }, [card.name]);
 
   return (
-    <div className="relative inline-block align-top" onContextMenu={(e)=>{e.preventDefault(); setMenu({open:true,x:e.clientX,y:e.clientY});}}>
+    <div
+      className="relative inline-block align-top"
+      onContextMenu={(e)=>{
+        if (suppressContextMenu) return;
+        e.preventDefault();
+        setMenu({open:true,x:e.clientX,y:e.clientY});
+      }}
+    >
       <div
         ref={setNodeRef}
         {...listeners}
@@ -121,7 +150,7 @@ export default function Card({
       </div>
       {menu.open && (
         <div
-          className="fixed z-50 rounded border border-zinc-800 bg-zinc-900 text-xs shadow"
+          className="fixed z-50 rounded border border-zinc-800 bg-zinc-900 text-xs shadow font-mtgmasters"
           style={{ left: menu.x, top: menu.y }}
           onMouseLeave={()=>setMenu((m)=>({...m,open:false}))}
         >

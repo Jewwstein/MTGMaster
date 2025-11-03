@@ -17,6 +17,41 @@ export type CardItem = {
   y?: number; // battlefield position
   counters?: number; // +1/+1 counters
   labels?: string[]; // e.g., ["hexproof","haste"]
+  token?: boolean;
+};
+
+export type RemoteSeatState = {
+  id: string;
+  name: string;
+  seatIndex: number;
+  zones: {
+    battlefield: CardItem[];
+    lands: CardItem[];
+    command: CardItem[];
+  };
+  hand: CardItem[];
+  life?: number | null;
+  poison?: number | null;
+  lifeThemeIndex?: number;
+  lifeThemeHex?: string | null;
+  playmatKey?: string | null;
+  updatedAt: number;
+};
+
+export type RemoteSeatPayload = {
+  name?: string;
+  seatIndex?: number;
+  zones?: {
+    battlefield?: CardItem[];
+    lands?: CardItem[];
+    command?: CardItem[];
+  };
+  hand?: CardItem[];
+  life?: number | null;
+  poison?: number | null;
+  lifeThemeIndex?: number;
+  lifeThemeHex?: string | null;
+  playmatKey?: string | null;
 };
 
 export type GameState = {
@@ -35,12 +70,17 @@ export type GameState = {
       command: CardItem[];
     };
     hand: CardItem[]; // private; not synced in realtime
+    playmatKey?: string | null;
   }>;
   // seats / order (used for seat names/ordering)
   turnOrder: string[];
   currentTurn: number; // index into turnOrder (optional usage)
   // local client seat index (matched by name)
   mySeat: number;
+  lifeThemeIndex: number;
+  lifeThemeHex: string | null;
+  playmatKey: string | null;
+  remoteSeats: Record<string, RemoteSeatState>;
   draw: (n?: number) => void;
   moveCard: (cardId: string, to: ZoneId, index?: number) => void;
   setBattlefieldPos: (cardId: string, x: number, y: number) => void;
@@ -55,6 +95,7 @@ export type GameState = {
   putOnTopLibrary: (cardId: string) => void;
   putOnBottomLibrary: (cardId: string) => void;
   drawSeven: () => void;
+  shuffleLibrary: () => void;
   mulliganLondon: (bottomCount: number) => void;
   mulliganSevenForSeven: () => void;
   untapAll: () => void;
@@ -72,10 +113,22 @@ export type GameState = {
   setSeats: (names: string[]) => void;
   setTurnOrder: (order: string[]) => void;
   setMySeat: (index: number) => void;
+  setRemoteSeat: (id: string, seat: RemoteSeatPayload) => void;
+  clearRemoteSeat: (id: string) => void;
+  clearAllRemoteSeats: () => void;
+  setLifeThemeIndex: (idx: number) => void;
+  setLifeThemeHex: (hex: string | null) => void;
+  setPlaymatKey: (key: string | null) => void;
 };
 
 function uid() {
   return Math.random().toString(36).slice(2);
+}
+
+function applyZonesWithSync(state: GameState, zones: Record<ZoneId, CardItem[]>) {
+  const normalized = normalizeZones(zones);
+  const players = syncPlayersFromZones(state.players, normalized, state.mySeat);
+  return { zones: normalized, players } as Partial<GameState>;
 }
 
 const sampleNames = [
@@ -92,7 +145,6 @@ const sampleNames = [
 ];
 const initialDeck: CardItem[] = sampleNames.map((name) => ({ id: uid(), name }));
 
-// Ensure no duplicate card ids across zones; keep last placement wins by zone order below
 function normalizeZones(zonesIn: Record<ZoneId, CardItem[]>): Record<ZoneId, CardItem[]> {
   const order: ZoneId[] = ["library", "hand", "battlefield", "lands", "graveyard", "exile", "command"];
   const seen = new Set<string>();
@@ -106,13 +158,64 @@ function normalizeZones(zonesIn: Record<ZoneId, CardItem[]>): Record<ZoneId, Car
     command: [],
   };
   for (const z of order) {
-    for (const c of zonesIn[z] ?? []) {
+    for (const c of (zonesIn[z] ?? [])) {
       if (!seen.has(c.id)) {
         seen.add(c.id);
         out[z].push(c);
       }
     }
   }
+  return out;
+}
+
+function syncPlayersFromZones(
+  playersIn: GameState["players"],
+  zones: Record<ZoneId, CardItem[]>,
+  seatIndex: number,
+): GameState["players"] {
+  const out = Array.isArray(playersIn)
+    ? playersIn.map((player, idx) => ({
+        ...player,
+        zones: {
+          battlefield: Array.isArray(player?.zones?.battlefield) ? player.zones.battlefield.map((card) => ({ ...card })) : [],
+          lands: Array.isArray(player?.zones?.lands) ? player.zones.lands.map((card) => ({ ...card })) : [],
+          command: Array.isArray(player?.zones?.command) ? player.zones.command.map((card) => ({ ...card })) : [],
+        },
+        hand: Array.isArray(player?.hand) ? player.hand.map((card) => ({ ...card })) : [],
+        playmatKey: player?.playmatKey ?? null,
+      }))
+    : [];
+
+  const ensureSeat = (idx: number) => {
+    while (out.length <= idx) {
+      out.push({
+        id: `p${out.length + 1}`,
+        name: `Player ${out.length + 1}`,
+        zones: { battlefield: [], lands: [], command: [] },
+        hand: [],
+        playmatKey: null,
+      });
+    }
+  };
+
+  const assignSeat = (idx: number) => {
+    ensureSeat(idx);
+    const prev = out[idx];
+    out[idx] = {
+      ...prev,
+      zones: {
+        battlefield: zones.battlefield.map((card) => ({ ...card })),
+        lands: zones.lands.map((card) => ({ ...card })),
+        command: zones.command.map((card) => ({ ...card })),
+      },
+      hand: zones.hand.map((card) => ({ ...card })),
+      playmatKey: prev?.playmatKey ?? null,
+    };
+  };
+
+  assignSeat(0);
+  if (seatIndex != null && seatIndex >= 0 && seatIndex !== 0) assignSeat(seatIndex);
+
   return out;
 }
 
@@ -146,11 +249,16 @@ export const useGame = create<GameState>((set, get) => ({
       name: "Player 1",
       zones: { battlefield: [], lands: [], command: [] },
       hand: [],
+      playmatKey: null,
     },
   ],
   turnOrder: ["Player 1", "Player 2", "Player 3", "Player 4"],
   currentTurn: 0,
   mySeat: -1,
+  lifeThemeIndex: 0,
+  lifeThemeHex: null,
+  playmatKey: null,
+  remoteSeats: {},
   draw: (n = 1) =>
     set((state) => {
       const lib = [...state.zones.library];
@@ -159,8 +267,66 @@ export const useGame = create<GameState>((set, get) => ({
         const top = lib.shift()!;
         hand.push(top);
       }
-      const zones = normalizeZones({ ...state.zones, library: lib, hand });
-      return { zones } as any;
+      const zones = { ...state.zones, library: lib, hand } as Record<ZoneId, CardItem[]>;
+      return applyZonesWithSync(state as GameState, zones);
+    }),
+  loadDeckFromNames: (cards, commanders) =>
+    set((state) => {
+      try {
+        const normalizedCards = Array.isArray(cards)
+          ? cards
+              .filter((entry) => entry && typeof entry.name === "string")
+              .map((entry) => ({
+                name: entry.name.trim(),
+                count: Math.max(1, typeof entry.count === "number" ? entry.count : 1),
+              }))
+              .filter((entry) => entry.name.length > 0)
+          : [];
+
+        const normalizedCommanders = Array.isArray(commanders)
+          ? commanders
+              .filter((name) => typeof name === "string")
+              .map((name) => name.trim())
+              .filter((name) => name.length > 0)
+          : [];
+
+        const newLibrary: CardItem[] = [];
+        normalizedCards.forEach((card) => {
+          for (let i = 0; i < card.count; i++) {
+            newLibrary.push({ id: uid(), name: card.name });
+          }
+        });
+
+        const commandersZone: CardItem[] = normalizedCommanders.map((name) => ({ id: uid(), name }));
+
+        const zones = {
+          ...state.zones,
+          library: newLibrary,
+          graveyard: [],
+          exile: [],
+        } as Record<ZoneId, CardItem[]>;
+
+        zones.command = commandersZone;
+        zones.hand = [];
+        zones.battlefield = [];
+        zones.lands = [];
+
+        const nextState = applyZonesWithSync(state as GameState, zones);
+        return nextState;
+      } catch (error) {
+        console.error("loadDeckFromNames failed", error);
+        return {} as any;
+      }
+    }),
+  shuffleLibrary: () =>
+    set((state) => {
+      const lib = [...state.zones.library];
+      for (let i = lib.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [lib[i], lib[j]] = [lib[j], lib[i]];
+      }
+      const zones = { ...state.zones, library: lib } as Record<ZoneId, CardItem[]>;
+      return applyZonesWithSync(state as GameState, zones);
     }),
   moveCard: (cardId, to, index) =>
     set((state) => {
@@ -178,12 +344,17 @@ export const useGame = create<GameState>((set, get) => ({
       if (fromZone == null) return { zones: state.zones } as any;
       const fromArr = [...zones[fromZone]];
       const [card] = fromArr.splice(fromIndex, 1);
-      // leaving battlefield: drop coords
+      // leaving battlefield: drop coords but preserve other metadata (e.g., tokens)
       const leavingBattlefield = fromZone === "battlefield";
-      const cleaned: CardItem = leavingBattlefield ? { ...card, x: undefined, y: undefined } : card;
+      const cleaned: CardItem = leavingBattlefield ? { ...card, x: undefined, y: undefined } : { ...card };
       const toArr = [...zones[to]];
-      if (index == null || index < 0 || index > toArr.length) toArr.push(cleaned);
-      else toArr.splice(index, 0, cleaned);
+      const shouldDeleteToken = leavingBattlefield && cleaned.token && to !== "battlefield";
+      if (!shouldDeleteToken) {
+        if (index == null || index < 0 || index > toArr.length) toArr.push(cleaned);
+        else toArr.splice(index, 0, cleaned);
+      }
+      const nextZones = { ...zones, [fromZone]: fromArr, [to]: toArr } as Record<ZoneId, CardItem[]>;
+      return applyZonesWithSync(state as GameState, nextZones);
     }),
   setBattlefieldPos: (cardId, x, y) =>
     set((state) => {
@@ -193,117 +364,16 @@ export const useGame = create<GameState>((set, get) => ({
         const p = { ...players[seat] } as any;
         const arr = (p.zones?.battlefield ?? []).map((c: CardItem) => (c.id === cardId ? { ...c, x, y } : c));
         p.zones = { ...p.zones, battlefield: arr };
+        p.playmatKey = state.playmatKey;
         players[seat] = p;
         const legacy = seat === 0 ? normalizeZones({ ...state.zones, battlefield: arr }) : state.zones;
         return { players, zones: legacy } as any;
       }
-      const zones = { ...state.zones } as Record<ZoneId, CardItem[]>;
+      const zones = state.zones as Record<ZoneId, CardItem[]>;
       const arr = zones.battlefield.map((c) => (c.id === cardId ? { ...c, x, y } : c));
       const zonesOut = normalizeZones({ ...zones, battlefield: arr });
-      return { zones: zonesOut } as any;
-    }),
-  toggleTap: (cardId) =>
-    set((state) => {
-      const seat = state.mySeat;
-      if (seat >= 0 && state.players[seat]) {
-        const players = [...state.players];
-        const p = { ...players[seat] } as any;
-        let found = false;
-        const bf = (p.zones?.battlefield ?? []).map((c: CardItem) => (c.id === cardId ? ((found = true), { ...c, tapped: !c.tapped }) : c));
-        const lands = (p.zones?.lands ?? []).map((c: CardItem) => (c.id === cardId ? ((found = true), { ...c, tapped: !c.tapped }) : c));
-        if (found) {
-          p.zones = { ...p.zones, battlefield: bf, lands };
-          players[seat] = p;
-          const legacy = seat === 0 ? normalizeZones({ ...state.zones, battlefield: bf, lands }) : state.zones;
-          return { players, zones: legacy } as any;
-        }
-      }
-      const z = { ...state.zones } as Record<ZoneId, CardItem[]>;
-      for (const k of Object.keys(z) as ZoneId[]) {
-        const i = z[k].findIndex((c) => c.id === cardId);
-        if (i >= 0) {
-          z[k] = z[k].map((c, idx) => (idx === i ? { ...c, tapped: !c.tapped } : c));
-          break;
-        }
-      }
-      return { zones: z } as any;
-    }),
-  incCounter: (cardId, delta) =>
-    set((state) => {
-      const z = { ...state.zones } as Record<ZoneId, CardItem[]>;
-      for (const k of Object.keys(z) as ZoneId[]) {
-        const i = z[k].findIndex((c) => c.id === cardId);
-        if (i >= 0) {
-          z[k] = z[k].map((c, idx) =>
-            idx === i ? { ...c, counters: Math.max(0, (c.counters ?? 0) + delta) } : c
-          );
-          break;
-        }
-      }
-      return { zones: z } as any;
-    }),
-  toggleLabel: (cardId, label) =>
-    set((state) => {
-      const z = { ...state.zones } as Record<ZoneId, CardItem[]>;
-      for (const k of Object.keys(z) as ZoneId[]) {
-        const i = z[k].findIndex((c) => c.id === cardId);
-        if (i >= 0) {
-          z[k] = z[k].map((c, idx) => {
-            if (idx !== i) return c;
-            const cur = Array.isArray(c.labels) ? c.labels : [];
-            const has = cur.includes(label);
-            return { ...c, labels: has ? cur.filter((x) => x !== label) : [...cur, label] };
-          });
-          break;
-        }
-      }
-      return { zones: z } as any;
-    }),
-  moveAnyToLibraryTop: (cardId) =>
-    set((state) => {
-      const z = { ...state.zones } as Record<ZoneId, CardItem[]>;
-      let found: CardItem | null = null;
-      for (const k of Object.keys(z) as ZoneId[]) {
-        const idx = z[k].findIndex((c) => c.id === cardId);
-        if (idx >= 0) {
-          [found] = z[k].splice(idx, 1);
-          break;
-        }
-      }
-      if (found) {
-        const clean: CardItem = { ...found };
-        delete (clean as any).x;
-        delete (clean as any).y;
-        clean.tapped = false;
-        z.library = [clean, ...z.library];
-      }
-      return { zones: z } as any;
-    }),
-  moveAnyToLibraryBottom: (cardId) =>
-    set((state) => {
-      const z = { ...state.zones } as Record<ZoneId, CardItem[]>;
-      let found: CardItem | null = null;
-      for (const k of Object.keys(z) as ZoneId[]) {
-        const idx = z[k].findIndex((c) => c.id === cardId);
-        if (idx >= 0) {
-          [found] = z[k].splice(idx, 1);
-          break;
-        }
-      }
-      if (found) {
-        const clean: CardItem = { ...found };
-        delete (clean as any).x;
-        delete (clean as any).y;
-        clean.tapped = false;
-        z.library = [...z.library, clean];
-      }
-      return { zones: z } as any;
-    }),
-  moveTopLibraryToBottom: () =>
-    set((state) => {
-      if (state.zones.library.length <= 1) return {} as any;
-      const [top, ...rest] = state.zones.library;
-      return { zones: { ...state.zones, library: [...rest, top] } } as any;
+      const players = syncPlayersFromZones(state.players, zonesOut, state.mySeat);
+      return { zones: zonesOut, players } as any;
     }),
   addToken: (name = "Token", to: ZoneId = "battlefield") =>
     set((state) => {
@@ -312,120 +382,54 @@ export const useGame = create<GameState>((set, get) => ({
         const players = [...state.players];
         const p = { ...players[seat] } as any;
         const z = { ...p.zones } as any;
-        z[to] = [...(z[to] ?? []), { id: uid(), name }];
+        z[to] = [...(z[to] ?? []), { id: uid(), name, token: true }];
         p.zones = z;
+        p.playmatKey = state.playmatKey;
         players[seat] = p;
         const legacy = seat === 0 ? normalizeZones({ ...state.zones, [to]: z[to] }) : state.zones;
         return { players, zones: legacy } as any;
       }
       const zones = state.zones as Record<ZoneId, CardItem[]>;
-      const zonesOut = normalizeZones({ ...zones, [to]: [...zones[to], { id: uid(), name }] });
-      return { zones: zonesOut } as any;
-    }),
-  moveToZone: (cardId, to) => {
-    const fn = (get() as any).moveCard as (id: string, to: ZoneId) => void;
-    fn(cardId, to);
-  },
-  putOnTopLibrary: (cardId) => {
-    const fn = (get() as any).moveAnyToLibraryTop as (id: string) => void;
-    fn(cardId);
-  },
-  putOnBottomLibrary: (cardId) => {
-    const fn = (get() as any).moveAnyToLibraryBottom as (id: string) => void;
-    fn(cardId);
-  },
-  drawSeven: () =>
-    set((state) => {
-      const lib = [...state.zones.library];
-      const hand: CardItem[] = [];
-      for (let i = 0; i < 7 && lib.length > 0; i++) {
-        const top = lib.shift()!;
-        hand.push(top);
-      }
-      const zones = normalizeZones({ ...state.zones, library: lib, hand });
-      return { zones } as any;
-    }),
-  // London mulligan: put N cards from current hand to bottom of library, then redraw to 7
-  mulliganLondon: (bottomCount: number) =>
-    set((state) => {
-      const lib = [...state.zones.library];
-      const hand = [...state.zones.hand];
-      // put chosen bottomCount from current hand onto bottom of library (take last N for now)
-      const putCount = Math.min(bottomCount, hand.length);
-      const toBottom = hand.splice(-putCount, putCount);
-      const newLib = [...lib, ...toBottom];
-      // draw up to 7
-      while (hand.length < 7 && newLib.length > 0) {
-        hand.push(newLib.shift()!);
-      }
-      const zones = normalizeZones({ ...state.zones, library: newLib, hand });
-      return { zones } as any;
-    }),
-  // Simple 7-for-7: put entire hand on bottom, then draw 7 fresh
-  mulliganSevenForSeven: () =>
-    set((state) => {
-      const lib = [...state.zones.library];
-      const hand = [...state.zones.hand];
-      const newLib = [...lib, ...hand];
-      const newHand: CardItem[] = [];
-      for (let i = 0; i < 7 && newLib.length > 0; i++) newHand.push(newLib.shift()!);
-      const zones = normalizeZones({ ...state.zones, library: newLib, hand: newHand });
-      return { zones } as any;
-    }),
-  untapAll: () =>
-    set((state) => {
-      const zones = state.zones as Record<ZoneId, CardItem[]>;
-      const battlefield = zones.battlefield.map((c) => ({ ...c, tapped: false }));
-      const lands = zones.lands.map((c) => ({ ...c, tapped: false }));
-      const out = normalizeZones({ ...zones, battlefield, lands });
-      return { zones: out } as any;
-    }),
-  incLife: (n) => set((state) => ({ life: Math.max(0, state.life + n) })),
-  incPoison: (n) =>
-    set((state) => ({ poison: Math.max(0, state.poison + n) })),
-  incCommanderTax: (n) =>
-    set((state) => ({ commanderTaxCount: Math.max(0, state.commanderTaxCount + n) })),
-  incCommanderDamage: (opponent, n) =>
-    set((state) => {
-      const cur = state.commanderDamage[opponent] ?? 0;
-      const next = Math.max(0, cur + n);
-      return { commanderDamage: { ...state.commanderDamage, [opponent]: next } } as any;
-    }),
-  loadDeckFromNames: (cards, commanders) =>
-    set((state) => {
-      const lib: CardItem[] = [];
-      for (const { name, count } of cards) {
-        const n = Math.max(0, Math.floor(count));
-        for (let i = 0; i < n; i++) lib.push({ id: uid(), name });
-      }
-      const command: CardItem[] = commanders.map((name) => ({ id: uid(), name }));
-      const zones = normalizeZones({
-        ...state.zones,
-        library: lib,
-        hand: [],
-        battlefield: [],
-        lands: [],
-        graveyard: [],
-        exile: [],
-        command,
-      });
-      return { zones } as any;
+      const zonesOut = normalizeZones({ ...zones, [to]: [...zones[to], { id: uid(), name, token: true }] });
+      const players = syncPlayersFromZones(state.players, zonesOut, state.mySeat);
+      return { zones: zonesOut, players } as any;
     }),
   snapshot: () => {
     const s = get();
-    // During migration, always derive players from legacy zones to prevent empty players overriding real zones
-    const players = [
-      {
-        id: "p1",
-        name: "Player 1",
-        zones: {
-          battlefield: s.zones.battlefield,
-          lands: s.zones.lands,
-          command: s.zones.command,
+    const players = Array.isArray(s.players)
+      ? s.players.map((player, idx) => ({
+          id: player?.id ?? `p${idx + 1}`,
+          name: player?.name ?? `Player ${idx + 1}`,
+          zones: {
+            battlefield: Array.isArray(player?.zones?.battlefield)
+              ? player.zones.battlefield.map((card) => ({ ...card }))
+              : [],
+            lands: Array.isArray(player?.zones?.lands) ? player.zones.lands.map((card) => ({ ...card })) : [],
+            command: Array.isArray(player?.zones?.command) ? player.zones.command.map((card) => ({ ...card })) : [],
+          },
+          hand: Array.isArray(player?.hand) ? player.hand.map((card) => ({ ...card })) : [],
+          playmatKey: player?.playmatKey ?? null,
+        }))
+      : [];
+    const remoteSeats = Object.fromEntries(
+      Object.entries(s.remoteSeats ?? {}).map(([id, seat]) => [
+        id,
+        {
+          ...seat,
+          zones: {
+            battlefield: Array.isArray(seat?.zones?.battlefield) ? seat.zones.battlefield.map((card) => ({ ...card })) : [],
+            lands: Array.isArray(seat?.zones?.lands) ? seat.zones.lands.map((card) => ({ ...card })) : [],
+            command: Array.isArray(seat?.zones?.command) ? seat.zones.command.map((card) => ({ ...card })) : [],
+          },
+          hand: Array.isArray(seat?.hand) ? seat.hand.map((card) => ({ ...card })) : [],
+          life: typeof seat?.life === "number" ? seat.life : null,
+          poison: typeof seat?.poison === "number" ? seat.poison : null,
+          lifeThemeIndex: typeof seat?.lifeThemeIndex === "number" ? seat.lifeThemeIndex : undefined,
+          lifeThemeHex: typeof seat?.lifeThemeHex === "string" ? seat.lifeThemeHex : null,
+          updatedAt: typeof seat.updatedAt === "number" ? seat.updatedAt : Date.now(),
         },
-        hand: s.zones.hand,
-      },
-    ];
+      ]),
+    );
     return {
       zones: s.zones,
       life: s.life,
@@ -435,6 +439,11 @@ export const useGame = create<GameState>((set, get) => ({
       players,
       turnOrder: s.turnOrder,
       currentTurn: s.currentTurn,
+      mySeat: s.mySeat,
+      lifeThemeIndex: s.lifeThemeIndex,
+      lifeThemeHex: s.lifeThemeHex,
+      remoteSeats,
+      playmatKey: s.playmatKey,
     };
   },
   hydrate: (snap: any) =>
@@ -460,8 +469,33 @@ export const useGame = create<GameState>((set, get) => ({
               name: "Player 1",
               zones: { battlefield: zones.battlefield, lands: zones.lands, command: zones.command },
               hand: zones.hand,
+              playmatKey: state.playmatKey,
             },
           ];
+        }
+        const remoteSeatsIn = snap?.remoteSeats && typeof snap.remoteSeats === "object" ? (snap.remoteSeats as Record<string, RemoteSeatState>) : state.remoteSeats;
+        const remoteSeats: Record<string, RemoteSeatState> = {};
+        if (remoteSeatsIn) {
+          for (const [id, seat] of Object.entries(remoteSeatsIn)) {
+            if (!seat) continue;
+            remoteSeats[id] = {
+              id: seat.id ?? id,
+              name: seat.name ?? "Opponent",
+              seatIndex: typeof seat.seatIndex === "number" ? seat.seatIndex : -1,
+              zones: {
+                battlefield: Array.isArray(seat?.zones?.battlefield) ? seat.zones.battlefield.map((card) => ({ ...card })) : [],
+                lands: Array.isArray(seat?.zones?.lands) ? seat.zones.lands.map((card) => ({ ...card })) : [],
+                command: Array.isArray(seat?.zones?.command) ? seat.zones.command.map((card) => ({ ...card })) : [],
+              },
+              hand: Array.isArray(seat?.hand) ? seat.hand.map((card) => ({ ...card })) : [],
+              life: typeof seat?.life === "number" ? seat.life : null,
+              poison: typeof seat?.poison === "number" ? seat.poison : null,
+              lifeThemeIndex: typeof seat?.lifeThemeIndex === "number" ? seat.lifeThemeIndex : undefined,
+              lifeThemeHex: typeof seat?.lifeThemeHex === "string" ? seat.lifeThemeHex : null,
+              playmatKey: typeof seat?.playmatKey === "string" ? seat.playmatKey : null,
+              updatedAt: typeof seat.updatedAt === "number" ? seat.updatedAt : Date.now(),
+            };
+          }
         }
         return {
           zones,
@@ -472,6 +506,10 @@ export const useGame = create<GameState>((set, get) => ({
           commanderDamage: typeof snap?.commanderDamage === "object" && snap?.commanderDamage ? snap.commanderDamage : state.commanderDamage,
           turnOrder: Array.isArray(snap?.turnOrder) ? snap.turnOrder : state.turnOrder,
           currentTurn: typeof snap?.currentTurn === "number" ? snap.currentTurn : state.currentTurn,
+          lifeThemeIndex: typeof snap?.lifeThemeIndex === "number" ? snap.lifeThemeIndex : state.lifeThemeIndex,
+          lifeThemeHex: typeof snap?.lifeThemeHex === "string" ? snap.lifeThemeHex : state.lifeThemeHex,
+          playmatKey: typeof snap?.playmatKey === "string" ? snap.playmatKey : state.playmatKey,
+          remoteSeats,
         } as any;
       } catch {
         return {} as any;
@@ -481,7 +519,13 @@ export const useGame = create<GameState>((set, get) => ({
     set((state) => {
       const players = [...state.players];
       while (players.length <= index) {
-        players.push({ id: `p${players.length + 1}`, name: `Player ${players.length + 1}` as string, zones: { battlefield: [], lands: [], command: [] }, hand: [] });
+        players.push({
+          id: `p${players.length + 1}`,
+          name: `Player ${players.length + 1}` as string,
+          zones: { battlefield: [], lands: [], command: [] },
+          hand: [],
+          playmatKey: null,
+        });
       }
       players[index] = { ...players[index], name };
       const turnOrder = [...state.turnOrder];
@@ -496,6 +540,7 @@ export const useGame = create<GameState>((set, get) => ({
         name: n || `Player ${i + 1}`,
         zones: state.players[i]?.zones ?? { battlefield: [], lands: [], command: [] },
         hand: state.players[i]?.hand ?? [],
+        playmatKey: state.players[i]?.playmatKey ?? null,
       }));
       const turnOrder = players.map((p) => p.name);
       return { players, turnOrder } as any;
@@ -506,4 +551,81 @@ export const useGame = create<GameState>((set, get) => ({
       return { turnOrder } as any;
     }),
   setMySeat: (index) => set(() => ({ mySeat: typeof index === "number" ? index : -1 }) as any),
+  setRemoteSeat: (id, seat) =>
+    set((state) => {
+      if (!id) return {} as any;
+      const existingSeats = { ...state.remoteSeats } as Record<string, RemoteSeatState>;
+      const seatIndex = typeof seat.seatIndex === "number" ? seat.seatIndex : -1;
+      for (const [key, value] of Object.entries(existingSeats)) {
+        if (key === id) continue;
+        const sameIndex = seatIndex >= 0 && value.seatIndex === seatIndex;
+        if (sameIndex) delete existingSeats[key];
+      }
+
+      const prev = existingSeats[id] ?? {
+        id,
+        name: seat.name ?? `Player`,
+        seatIndex: typeof seat.seatIndex === "number" ? seat.seatIndex : -1,
+        zones: { battlefield: [], lands: [], command: [] },
+        hand: [],
+        life: typeof seat.life === "number" ? seat.life : null,
+        poison: typeof seat.poison === "number" ? seat.poison : null,
+        lifeThemeIndex: typeof seat.lifeThemeIndex === "number" ? seat.lifeThemeIndex : null,
+        lifeThemeHex: typeof seat.lifeThemeHex === "string" ? seat.lifeThemeHex : null,
+        playmatKey: typeof seat.playmatKey === "string" ? seat.playmatKey : null,
+        updatedAt: Date.now(),
+      };
+      const next: RemoteSeatState = {
+        ...prev,
+        name: seat.name ?? prev.name,
+        seatIndex: typeof seat.seatIndex === "number" ? seat.seatIndex : prev.seatIndex,
+        zones: {
+          battlefield: seat.zones?.battlefield ? seat.zones.battlefield.map((c) => ({ ...c })) : prev.zones.battlefield,
+          lands: seat.zones?.lands ? seat.zones.lands.map((c) => ({ ...c })) : prev.zones.lands,
+          command: seat.zones?.command ? seat.zones.command.map((c) => ({ ...c })) : prev.zones.command,
+        },
+        hand: seat.hand ? seat.hand.map((c) => ({ ...c })) : prev.hand,
+        life: typeof seat.life === "number" ? seat.life : prev.life,
+        poison: typeof seat.poison === "number" ? seat.poison : prev.poison,
+        lifeThemeIndex: typeof seat.lifeThemeIndex === "number" ? seat.lifeThemeIndex : prev.lifeThemeIndex,
+        lifeThemeHex: typeof seat.lifeThemeHex === "string" ? seat.lifeThemeHex : prev.lifeThemeHex,
+        playmatKey: typeof seat.playmatKey === "string" ? seat.playmatKey : seat.playmatKey === null ? null : prev.playmatKey,
+        updatedAt: Date.now(),
+      };
+      return { remoteSeats: { ...existingSeats, [id]: next } } as any;
+    }),
+  clearRemoteSeat: (id) =>
+    set((state) => {
+      if (!id || !(id in state.remoteSeats)) return {} as any;
+      const next = { ...state.remoteSeats } as Record<string, RemoteSeatState>;
+      delete next[id];
+      return { remoteSeats: next } as any;
+    }),
+  clearAllRemoteSeats: () => set(() => ({ remoteSeats: {} }) as any),
+  setLifeThemeIndex: (idx) =>
+    set(() => ({ lifeThemeIndex: typeof idx === "number" ? Math.max(0, Math.floor(idx)) : 0 }) as any),
+  setLifeThemeHex: (hex) =>
+    set(() => ({ lifeThemeHex: typeof hex === "string" ? hex : null }) as any),
+  setPlaymatKey: (key) =>
+    set((state) => {
+      const normalized = typeof key === "string" && key.trim() ? key.trim() : null;
+      const nextPlayers = [...state.players];
+      if (state.mySeat >= 0 && nextPlayers[state.mySeat]) {
+        nextPlayers[state.mySeat] = { ...nextPlayers[state.mySeat], playmatKey: normalized };
+      } else {
+        nextPlayers[0] = { ...nextPlayers[0], playmatKey: normalized };
+      }
+      return { playmatKey: normalized, players: nextPlayers } as any;
+    }),
 }));
+
+(useGame as any).subscribe?.((() => {
+  const payload = (useGame as any).getState?.().snapshot?.();
+  if (!payload) return;
+  try {
+    if (typeof window !== "undefined") {
+      const event = new CustomEvent("game:local-change", { detail: payload });
+      window.dispatchEvent(event);
+    }
+  } catch {}
+}) as () => void);

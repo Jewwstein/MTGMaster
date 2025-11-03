@@ -1,50 +1,106 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "../../../../lib/auth";
 import prisma from "../../../../lib/prisma";
 
-// GET /api/decks/[id] -> fetch deck with aggregated cards
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+function resolveDeckId(req: NextRequest, params?: { id?: string | string[] }): string | null {
+  if (!params) return req.nextUrl.pathname.split("/").pop() || null;
+  const raw = params.id;
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw) && raw.length > 0) return raw[0];
+  return req.nextUrl.pathname.split("/").pop() || null;
+}
+
+export async function GET(request: NextRequest, { params }: { params: { id?: string | string[] } }) {
+  const deckId = resolveDeckId(request, params);
+  if (!deckId) {
+    return NextResponse.json({ error: "Missing deck id" }, { status: 400 });
+  }
+
   try {
-    const id = params.id;
     const deck = await prisma.deck.findUnique({
-      where: { id },
-      select: { id: true, name: true, cards: { select: { name: true, isCommander: true } } },
+      where: { id: deckId },
+      include: {
+        cards: {
+          orderBy: { name: "asc" },
+        },
+      },
     });
-    if (!deck) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    const map = new Map<string, { name: string; count: number; commander: boolean }>();
-    for (const c of deck.cards) {
-      const prev = map.get(c.name) ?? { name: c.name, count: 0, commander: false };
-      prev.count += 1;
-      prev.commander = prev.commander || !!c.isCommander;
-      map.set(c.name, prev);
+
+    if (!deck) {
+      return NextResponse.json({ error: "Deck not found" }, { status: 404 });
     }
-    const entries = Array.from(map.values());
-    return NextResponse.json({ id: deck.id, name: deck.name, entries });
-  } catch (e: any) {
-    return NextResponse.json({ error: String(e?.message || "failed") }, { status: 500 });
+
+    return NextResponse.json({
+      id: deck.id,
+      name: deck.name,
+      entries: deck.cards.map((card) => ({
+        id: card.id,
+        name: card.name,
+        count: card.quantity,
+        commander: card.isCommander,
+      })),
+    });
+  } catch (error) {
+    console.error("GET /api/decks/[id] failed", error);
+    return NextResponse.json({ error: "Failed to load deck" }, { status: 500 });
   }
 }
 
-// PATCH /api/decks/[id] -> rename
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(request: NextRequest, { params }: { params: { id?: string | string[] } }) {
+  const session = await getServerSession(authOptions);
+  const userId = (session?.user as { id?: string } | undefined)?.id;
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const deckId = resolveDeckId(request, params);
+  if (!deckId) {
+    return NextResponse.json({ error: "Missing deck id" }, { status: 400 });
+  }
+
   try {
-    const id = params.id;
-    const body = await req.json();
-    const name: string | undefined = body?.name;
-    const updated = await prisma.deck.update({ where: { id }, data: { name } });
-    return NextResponse.json({ id: updated.id, name: updated.name });
-  } catch (e: any) {
-    return NextResponse.json({ error: String(e?.message || "failed") }, { status: 500 });
+    const body = await request.json();
+    const rawName = typeof body?.name === "string" ? body.name.trim() : "";
+    if (!rawName) {
+      return NextResponse.json({ error: "Name is required" }, { status: 400 });
+    }
+
+    const deck = await prisma.deck.findUnique({ where: { id: deckId } });
+    if (!deck || deck.ownerId !== userId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    const updated = await prisma.deck.update({ where: { id: deckId }, data: { name: rawName } });
+    return NextResponse.json({ deck: { id: updated.id, name: updated.name, updatedAt: updated.updatedAt } });
+  } catch (error) {
+    console.error("PATCH /api/decks/[id] failed", error);
+    return NextResponse.json({ error: "Failed to update deck" }, { status: 500 });
   }
 }
 
-// DELETE /api/decks/[id]
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+export async function DELETE(request: NextRequest, { params }: { params: { id?: string | string[] } }) {
+  const session = await getServerSession(authOptions);
+  const userId = (session?.user as { id?: string } | undefined)?.id;
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const deckId = resolveDeckId(request, params);
+  if (!deckId) {
+    return NextResponse.json({ error: "Missing deck id" }, { status: 400 });
+  }
+
   try {
-    const id = params.id;
-    await prisma.deckCard.deleteMany({ where: { deckId: id } });
-    await prisma.deck.delete({ where: { id } });
+    const deck = await prisma.deck.findUnique({ where: { id: deckId } });
+    if (!deck || deck.ownerId !== userId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    await prisma.deck.delete({ where: { id: deckId } });
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    return NextResponse.json({ error: String(e?.message || "failed") }, { status: 500 });
+  } catch (error) {
+    console.error("DELETE /api/decks/[id] failed", error);
+    return NextResponse.json({ error: "Failed to delete deck" }, { status: 500 });
   }
 }

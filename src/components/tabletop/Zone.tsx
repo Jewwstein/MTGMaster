@@ -13,6 +13,7 @@ export default function Zone({
   isDragging = false,
   noWrap = false,
   innerClassName,
+  playmat,
 }: {
   id: ZoneId;
   title: string;
@@ -20,6 +21,7 @@ export default function Zone({
   isDragging?: boolean;
   noWrap?: boolean;
   innerClassName?: string;
+  playmat?: { filePath: string; name?: string | null } | null;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   const cards = useGame((s: any) => (s?.zones && s.zones[id]) ? (s.zones[id] as ReadonlyArray<CardItem>) : EMPTY_CARDS);
@@ -29,6 +31,7 @@ export default function Zone({
   });
   const handleToggle = (cardId: string) => apiRef.current?.toggleTap?.(cardId);
   const handleTopToBottom = () => apiRef.current?.moveTopLibraryToBottom?.();
+  const handleShuffle = () => apiRef.current?.shuffleLibrary?.();
   const handleToLibTop = (cid: string) => apiRef.current?.moveAnyToLibraryTop?.(cid);
   const handleToLibBottom = (cid: string) => apiRef.current?.moveAnyToLibraryBottom?.(cid);
   const [menu, setMenu] = React.useState<{open:boolean; x:number; y:number; cardId?:string}>({open:false,x:0,y:0});
@@ -36,6 +39,18 @@ export default function Zone({
   const [scryN, setScryN] = React.useState(1);
 
   const battlefield = id === "battlefield";
+  const backgroundStyle = React.useMemo(() => {
+    if (!playmat?.filePath) return undefined;
+    return {
+      backgroundImage: `url(${playmat.filePath})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+      backgroundColor: "rgba(12, 10, 16, 0.65)",
+      backgroundBlendMode: "overlay",
+    } as const;
+  }, [playmat?.filePath]);
+
   return (
     <div
       id={`zone-${id}`}
@@ -48,6 +63,9 @@ export default function Zone({
         <span>{title}</span>
         {id === "library" && (
           <div className="flex items-center gap-2 font-normal">
+            {apiRef.current?.shuffleLibrary && (
+              <button onClick={handleShuffle} className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] hover:bg-zinc-800">Shuffle</button>
+            )}
             <button onClick={handleTopToBottom} className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] hover:bg-zinc-800">Top→Bottom</button>
             <div className="flex items-center gap-1">
               <span className="text-zinc-400">Scry</span>
@@ -60,7 +78,12 @@ export default function Zone({
         )}
       </div>
       {battlefield ? (
-        <div id="zone-battlefield-canvas" className="relative h-full min-h-[360px]">
+        <div
+          id="zone-battlefield-canvas"
+          className="relative h-full min-h-[360px] overflow-hidden rounded"
+          style={backgroundStyle}
+        >
+          {playmat?.filePath && <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-zinc-900/30 via-zinc-900/40 to-zinc-950/60" />}
           {cards.map((c: CardItem) => (
             <div
               key={c.id}
@@ -83,6 +106,7 @@ export default function Zone({
               ? "flex gap-2 overflow-x-auto whitespace-nowrap"
               : "flex h-full flex-wrap content-start gap-2")
           }
+          style={backgroundStyle}
         >
           {cards.map((c: CardItem) => (
             <div key={c.id} onContextMenu={(e)=>{e.preventDefault(); setMenu({open:true,x:e.clientX,y:e.clientY,cardId:c.id});}}>
@@ -96,7 +120,7 @@ export default function Zone({
       )}
       {menu.open && (
         <div
-          className="fixed z-50 rounded border border-zinc-800 bg-zinc-900 text-xs shadow"
+          className="fixed z-50 rounded border border-zinc-800 bg-zinc-900 text-xs shadow font-mtgmasters"
           style={{ left: menu.x, top: menu.y }}
           onMouseLeave={()=>setMenu((m: {open:boolean;x:number;y:number;cardId?:string})=>({...m,open:false}))}
         >

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import type { DeckCard } from "@prisma/client";
 import { authOptions } from "../../../../lib/auth";
 import prisma from "../../../../lib/prisma";
 
@@ -38,7 +37,7 @@ export async function GET(request: NextRequest, context: DeckRouteContext) {
       return NextResponse.json({ error: "Deck not found" }, { status: 404 });
     }
 
-    const entries = deck.cards.map((card: DeckCard) => ({
+    const entries = deck.cards.map((card) => ({
       id: card.id,
       name: card.name,
       count: card.quantity,

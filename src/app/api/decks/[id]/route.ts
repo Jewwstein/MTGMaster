@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import type { Prisma } from "@prisma/client";
 import { authOptions } from "../../../../lib/auth";
 import prisma from "../../../../lib/prisma";
 
 type DeckRouteContext = { params: Promise<{ id: string }> };
+
+type DeckCardRow = {
+  id: string;
+  name: string;
+  quantity: number;
+  isCommander: boolean;
+};
 
 async function resolveDeckId(req: NextRequest, context: DeckRouteContext): Promise<string | null> {
   try {
@@ -32,13 +38,13 @@ export async function GET(request: NextRequest, context: DeckRouteContext) {
           orderBy: { name: "asc" },
         },
       },
-    })) as Prisma.DeckGetPayload<{ include: { cards: true } }> | null;
+    })) as { id: string; name: string; cards: DeckCardRow[] } | null;
 
     if (!deck) {
       return NextResponse.json({ error: "Deck not found" }, { status: 404 });
     }
 
-    const entries = deck.cards.map((card) => ({
+    const entries = deck.cards.map((card: DeckCardRow) => ({
       id: card.id,
       name: card.name,
       count: card.quantity,

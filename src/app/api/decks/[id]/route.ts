@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import type { Prisma } from "@prisma/client";
 import { authOptions } from "../../../../lib/auth";
 import prisma from "../../../../lib/prisma";
 
@@ -24,14 +25,14 @@ export async function GET(request: NextRequest, context: DeckRouteContext) {
   }
 
   try {
-    const deck = await prisma.deck.findUnique({
+    const deck = (await prisma.deck.findUnique({
       where: { id: deckId },
       include: {
         cards: {
           orderBy: { name: "asc" },
         },
       },
-    });
+    })) as Prisma.DeckGetPayload<{ include: { cards: true } }> | null;
 
     if (!deck) {
       return NextResponse.json({ error: "Deck not found" }, { status: 404 });

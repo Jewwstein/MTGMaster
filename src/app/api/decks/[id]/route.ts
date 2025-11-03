@@ -3,16 +3,22 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/auth";
 import prisma from "../../../../lib/prisma";
 
-function resolveDeckId(req: NextRequest, params?: { id?: string | string[] }): string | null {
-  if (!params) return req.nextUrl.pathname.split("/").pop() || null;
-  const raw = params.id;
-  if (typeof raw === "string") return raw;
-  if (Array.isArray(raw) && raw.length > 0) return raw[0];
-  return req.nextUrl.pathname.split("/").pop() || null;
+type DeckRouteContext = { params: Promise<{ id: string }> };
+
+async function resolveDeckId(req: NextRequest, context: DeckRouteContext): Promise<string | null> {
+  try {
+    const params = await context.params;
+    const raw = params?.id;
+    if (typeof raw === "string" && raw.trim()) return raw.trim();
+  } catch (error) {
+    // ignore resolution errors and fall back to path parsing
+  }
+  const segments = req.nextUrl.pathname.split("/").filter(Boolean);
+  return segments.length > 0 ? segments[segments.length - 1] : null;
 }
 
-export async function GET(request: NextRequest, { params }: { params: { id?: string | string[] } }) {
-  const deckId = resolveDeckId(request, params);
+export async function GET(request: NextRequest, context: DeckRouteContext) {
+  const deckId = await resolveDeckId(request, context);
   if (!deckId) {
     return NextResponse.json({ error: "Missing deck id" }, { status: 400 });
   }
@@ -47,14 +53,14 @@ export async function GET(request: NextRequest, { params }: { params: { id?: str
   }
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: { id?: string | string[] } }) {
+export async function PATCH(request: NextRequest, context: DeckRouteContext) {
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const deckId = resolveDeckId(request, params);
+  const deckId = await resolveDeckId(request, context);
   if (!deckId) {
     return NextResponse.json({ error: "Missing deck id" }, { status: 400 });
   }
@@ -79,14 +85,14 @@ export async function PATCH(request: NextRequest, { params }: { params: { id?: s
   }
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: { id?: string | string[] } }) {
+export async function DELETE(request: NextRequest, context: DeckRouteContext) {
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const deckId = resolveDeckId(request, params);
+  const deckId = await resolveDeckId(request, context);
   if (!deckId) {
     return NextResponse.json({ error: "Missing deck id" }, { status: 400 });
   }

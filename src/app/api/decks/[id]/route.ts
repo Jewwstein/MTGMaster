@@ -10,6 +10,7 @@ type DeckCardRow = {
   name: string;
   quantity: number;
   isCommander: boolean;
+  image: string | null;
 };
 
 async function resolveDeckId(req: NextRequest, context: DeckRouteContext): Promise<string | null> {
@@ -49,6 +50,7 @@ export async function GET(request: NextRequest, context: DeckRouteContext) {
       name: card.name,
       count: card.quantity,
       commander: card.isCommander,
+      image: card.image,
     }));
 
     return NextResponse.json({

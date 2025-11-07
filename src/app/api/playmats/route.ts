@@ -132,13 +132,19 @@ export async function POST(request: NextRequest) {
     const slug = generateSlug(name);
     const paths = await saveFile(file, slug);
 
+    let ownerId: string | null = null;
+    if (userId) {
+      const existingUser = await prisma.user.findUnique({ where: { id: userId } });
+      if (existingUser) ownerId = existingUser.id;
+    }
+
     const created = await prisma.playmat.create({
       data: {
         name,
         slug,
         filePath: paths.filePath,
         previewPath: paths.previewPath,
-        uploadedById: userId,
+        uploadedById: ownerId,
         isPreset: false,
       },
     });

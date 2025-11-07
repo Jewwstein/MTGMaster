@@ -2,6 +2,7 @@
 import React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useGame, type ZoneId, type CardItem, type GameState } from "../../state/game";
+import { playSound } from "../../lib/sound";
 import Card from "./Card";
 
 const EMPTY_CARDS: ReadonlyArray<CardItem> = Object.freeze([] as CardItem[]);
@@ -21,7 +22,11 @@ export default function Zone({
   isDragging?: boolean;
   noWrap?: boolean;
   innerClassName?: string;
-  playmat?: { filePath: string; name?: string | null } | null;
+  playmat?: {
+    filePath: string;
+    name?: string | null;
+    adjustment?: { zoom: number; position: { x: number; y: number } } | null;
+  } | null;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   const cards = useGame((s: any) => (s?.zones && s.zones[id]) ? (s.zones[id] as ReadonlyArray<CardItem>) : EMPTY_CARDS);
@@ -29,35 +34,61 @@ export default function Zone({
   React.useEffect(() => {
     apiRef.current = (useGame as any).getState?.();
   });
-  const handleToggle = (cardId: string) => apiRef.current?.toggleTap?.(cardId);
+  const handleToggle = (cardId: string) => {
+    apiRef.current?.toggleTap?.(cardId);
+    playSound("tap");
+  };
   const handleTopToBottom = () => apiRef.current?.moveTopLibraryToBottom?.();
   const handleShuffle = () => apiRef.current?.shuffleLibrary?.();
   const handleToLibTop = (cid: string) => apiRef.current?.moveAnyToLibraryTop?.(cid);
   const handleToLibBottom = (cid: string) => apiRef.current?.moveAnyToLibraryBottom?.(cid);
+  const handleClone = (cid: string) => apiRef.current?.cloneCard?.(cid);
   const [menu, setMenu] = React.useState<{open:boolean; x:number; y:number; cardId?:string}>({open:false,x:0,y:0});
   const [scryOpen, setScryOpen] = React.useState(false);
   const [scryN, setScryN] = React.useState(1);
 
   const battlefield = id === "battlefield";
-  const backgroundStyle = React.useMemo(() => {
+  const backgroundStyle = React.useMemo<React.CSSProperties | undefined>(() => {
     if (!playmat?.filePath) return undefined;
+    const zoom = Math.min(Math.max(playmat.adjustment?.zoom ?? 1, 1), 4);
+    const posX = Math.min(Math.max(playmat.adjustment?.position?.x ?? 50, 0), 100);
+    const posY = Math.min(Math.max(playmat.adjustment?.position?.y ?? 50, 0), 100);
     return {
       backgroundImage: `url(${playmat.filePath})`,
-      backgroundSize: "cover",
-      backgroundPosition: "center",
+      backgroundSize: `${Math.round(zoom * 100)}% auto`,
+      backgroundPosition: `${Math.round(posX)}% ${Math.round(posY)}%`,
       backgroundRepeat: "no-repeat",
       backgroundColor: "rgba(12, 10, 16, 0.65)",
       backgroundBlendMode: "overlay",
-    } as const;
-  }, [playmat?.filePath]);
+    };
+  }, [playmat?.filePath, playmat?.adjustment?.zoom, playmat?.adjustment?.position?.x, playmat?.adjustment?.position?.y]);
+  
+  // Determine if this zone should be semi-transparent
+  const isTransparentZone = !["battlefield", "lands", "hand"].includes(id);
+
+  const zoneStyle: React.CSSProperties = {
+    backgroundColor: isTransparentZone ? "rgba(15, 15, 23, 0.35)" : "rgba(24, 24, 27, 0.92)",
+    backdropFilter: isTransparentZone ? "blur(6px)" : undefined,
+    WebkitBackdropFilter: isTransparentZone ? "blur(6px)" : undefined,
+    transition: "background-color 0.2s ease, backdrop-filter 0.2s ease",
+  };
+
+  const contentStyle: React.CSSProperties = {
+    ...(backgroundStyle || {}),
+    backgroundColor: isTransparentZone ? "rgba(24, 24, 27, 0.22)" : undefined,
+    borderRadius: isTransparentZone ? "0.375rem" : undefined,
+    height: "100%",
+    transition: "background-color 0.2s ease",
+  };
 
   return (
     <div
       id={`zone-${id}`}
       ref={setNodeRef}
-      className={`rounded-md border border-zinc-800 bg-zinc-900/60 p-2 ${
+      className={`rounded-md border border-zinc-800/80 p-2 transition-all duration-200 ${
         isDragging && isOver ? "ring-2 ring-amber-500" : ""
       } ${className ?? ""}`}
+      style={zoneStyle}
     >
       <div className="mb-2 flex items-center justify-between text-xs font-semibold text-zinc-300">
         <span>{title}</span>
@@ -103,16 +134,17 @@ export default function Zone({
           className={
             innerClassName ??
             (noWrap
-              ? "flex gap-2 overflow-x-auto whitespace-nowrap"
-              : "flex h-full flex-wrap content-start gap-2")
+              ? 'flex gap-2 overflow-x-auto whitespace-nowrap hover:opacity-100'
+              : 'flex h-full flex-wrap content-start gap-2 hover:opacity-100')
           }
-          style={backgroundStyle}
+          style={contentStyle}
         >
           {cards.map((c: CardItem) => (
             <div key={c.id} onContextMenu={(e)=>{e.preventDefault(); setMenu({open:true,x:e.clientX,y:e.clientY,cardId:c.id});}}>
               <Card
                 card={c}
                 onClick={id === "lands" ? () => handleToggle(c.id) : undefined}
+                sizeClass={id === "command" ? "w-36 h-52" : undefined}
               />
             </div>
           ))}
@@ -124,6 +156,15 @@ export default function Zone({
           style={{ left: menu.x, top: menu.y }}
           onMouseLeave={()=>setMenu((m: {open:boolean;x:number;y:number;cardId?:string})=>({...m,open:false}))}
         >
+          {battlefield && (
+            <button
+              className="block w-full px-3 py-1 text-left hover:bg-zinc-800"
+              onClick={() => {
+                if (menu.cardId) handleClone(menu.cardId);
+                setMenu((m: {open:boolean;x:number;y:number;cardId?:string})=>({...m,open:false}));
+              }}
+            >Clone</button>
+          )}
           <button
             className="block w-full px-3 py-1 text-left hover:bg-zinc-800"
             onClick={() => {

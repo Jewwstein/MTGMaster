@@ -87,6 +87,7 @@ model DeckCard {
   quantity    Int     @default(1)
   isCommander Boolean @default(false)
   isCompanion Boolean @default(false)
+  image       String?
   deck        Deck    @relation(fields: [deckId], references: [id], onDelete: Cascade)
 }
 

@@ -14,16 +14,81 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
       path: "/api/socket-io",
     });
 
+    const presenceByRoom = new Map<string, Map<string, string>>();
+
+    const normalizeRoom = (roomCode: string) => (roomCode ?? "").toString().trim().toUpperCase();
+    const normalizeName = (name: string) => (typeof name === "string" ? name.trim() : "");
+
     io.on("connection", (socket) => {
+      const removePresence = (room: string | null | undefined, nameKey?: string | null) => {
+        if (!room) return;
+        const upperRoom = normalizeRoom(room);
+        if (!upperRoom) return;
+        if (!nameKey) {
+          const existingKey = socket.data?.nameKey as string | undefined;
+          if (existingKey) nameKey = existingKey;
+        }
+        if (!nameKey) return;
+        const roomMap = presenceByRoom.get(upperRoom);
+        if (!roomMap) return;
+        if (roomMap.get(nameKey) === socket.id) {
+          roomMap.delete(nameKey);
+          if (roomMap.size === 0) {
+            presenceByRoom.delete(upperRoom);
+          }
+        }
+      };
+
       socket.on("join", (roomCode: string, displayName: string) => {
-        socket.join(roomCode);
-        socket.data.displayName = displayName;
-        io.to(roomCode).emit("presence", { id: socket.id, name: displayName, type: "join" });
+        const room = normalizeRoom(roomCode);
+        if (!room) return;
+        const rawName = normalizeName(displayName);
+        const safeName = rawName || "Player";
+        const nameKey = safeName.toLowerCase();
+
+        let roomMap = presenceByRoom.get(room);
+        if (!roomMap) {
+          roomMap = new Map();
+          presenceByRoom.set(room, roomMap);
+        }
+
+        const existingSocketId = roomMap.get(nameKey);
+        if (existingSocketId && existingSocketId !== socket.id) {
+          roomMap.delete(nameKey);
+          const existingSocket = io.sockets.sockets.get(existingSocketId);
+          const previousName = existingSocket?.data?.displayName || safeName;
+          const previousKey = typeof existingSocket?.data?.nameKey === "string" ? existingSocket.data.nameKey : nameKey;
+          io.to(room).emit("presence", { id: existingSocketId, name: previousName, key: previousKey, type: "leave" });
+          if (existingSocket) {
+            existingSocket.leave(room);
+            if (existingSocket.data) {
+              if (existingSocket.data.roomCode === room) existingSocket.data.roomCode = null;
+              if (existingSocket.data.nameKey === nameKey) existingSocket.data.nameKey = null;
+            }
+          }
+        }
+
+        socket.join(room);
+        socket.data.displayName = safeName;
+        socket.data.roomCode = room;
+        socket.data.nameKey = nameKey;
+
+        roomMap.set(nameKey, socket.id);
+        io.to(room).emit("presence", { id: socket.id, name: safeName, key: nameKey, type: "join" });
       });
 
       socket.on("leave", (roomCode: string) => {
-        socket.leave(roomCode);
-        io.to(roomCode).emit("presence", { id: socket.id, name: socket.data.displayName, type: "leave" });
+        const room = normalizeRoom(roomCode);
+        if (!room) return;
+        const displayName = socket.data?.displayName || "Player";
+        const key = typeof socket.data?.nameKey === "string" ? (socket.data.nameKey as string) : normalizeName(displayName).toLowerCase();
+        socket.leave(room);
+        removePresence(room, key);
+        if (socket.data) {
+          if (socket.data.roomCode === room) socket.data.roomCode = null;
+          if (socket.data.nameKey === key) socket.data.nameKey = null;
+        }
+        io.to(room).emit("presence", { id: socket.id, name: displayName, key, type: "leave" });
       });
 
       socket.on("message", (roomCode: string, payload: any) => {
@@ -34,7 +99,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
         if (!roomCode) return;
         const body = typeof payload === "object" && payload ? { ...payload } : {};
         body.from = socket.id;
-        io.to(roomCode).emit("state", roomCode, body);
+        body.playerKey = socket.data.nameKey;
+        socket.to(roomCode).emit("state", roomCode, body);
       });
 
       // Broadcast dice rolls (scoped to room when roomCode provided)
@@ -53,7 +119,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
       });
 
       socket.on("disconnect", () => {
-        // best effort; room unknown
+        const room = socket.data?.roomCode as string | undefined;
+        const displayName = socket.data?.displayName || "Player";
+        const nameKey = socket.data?.nameKey as string | undefined;
+        if (room && nameKey) {
+          removePresence(room, nameKey);
+          io.to(normalizeRoom(room)).emit("presence", { id: socket.id, name: displayName, key: nameKey, type: "disconnect" });
+        }
       });
     });
 

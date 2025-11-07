@@ -2,12 +2,23 @@
 import axios from "axios";
 import React, { createContext, useContext, useState, useCallback, useMemo, useRef } from "react";
 
+type PreviewTarget = {
+  name: string;
+  counters?: number | null;
+  themeHex?: string | null;
+  themeIndex?: number;
+  themeImage?: string | null;
+  customText?: string | null;
+  image?: string | null;
+};
+
 type PreviewCtx = {
-  hoverIn: (cardName: string) => void;
+  hoverIn: (target: string | PreviewTarget) => void;
   hoverOut: () => void;
   img: string | null;
   name: string | null;
   loading: boolean;
+  meta: PreviewTarget | null;
 };
 
 const Ctx = createContext<PreviewCtx | null>(null);
@@ -49,22 +60,44 @@ export default function PreviewProvider({ children }: { children: React.ReactNod
   const [cardName, setCardName] = useState<string | null>(null);
   const [img, setImg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [meta, setMeta] = useState<PreviewTarget | null>(null);
   const openTimer = useRef<NodeJS.Timeout | null>(null);
   const closeTimer = useRef<NodeJS.Timeout | null>(null);
+  const pendingTargetRef = useRef<PreviewTarget | null>(null);
 
-  const doOpen = useCallback(async (name: string) => {
-    setCardName(name);
+  const normalizeTarget = useCallback((input: string | PreviewTarget): PreviewTarget => {
+    if (typeof input === "string") {
+      return { name: input };
+    }
+    return input;
+  }, []);
+
+  const doOpen = useCallback(async (target: PreviewTarget) => {
+    pendingTargetRef.current = null;
+    setMeta(target);
+    setCardName(target.name);
+    if (target.image && target.image.trim().length > 0) {
+      setImg(target.image);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    const url = await getScryfallImage(name);
+    const url = await getScryfallImage(target.name);
     setImg(url);
     setLoading(false);
   }, []);
 
-  const hoverIn = useCallback((name: string) => {
+  const hoverIn = useCallback((target: string | PreviewTarget) => {
     if (openTimer.current) clearTimeout(openTimer.current);
     if (closeTimer.current) clearTimeout(closeTimer.current);
-    openTimer.current = setTimeout(() => doOpen(name), 350);
-  }, [doOpen]);
+    const normalized = normalizeTarget(target);
+    pendingTargetRef.current = normalized;
+    openTimer.current = setTimeout(() => {
+      if (pendingTargetRef.current) {
+        doOpen(pendingTargetRef.current);
+      }
+    }, 350);
+  }, [doOpen, normalizeTarget]);
 
   const hoverOut = useCallback(() => {
     if (openTimer.current) {
@@ -76,10 +109,15 @@ export default function PreviewProvider({ children }: { children: React.ReactNod
       // keep last image so panel doesn't flash empty
       setCardName(null);
       setLoading(false);
+      setMeta(null);
     }, 200);
+    pendingTargetRef.current = null;
   }, []);
 
-  const value = useMemo(() => ({ hoverIn, hoverOut, img, name: cardName, loading }), [hoverIn, hoverOut, img, cardName, loading]);
+  const value = useMemo(
+    () => ({ hoverIn, hoverOut, img, name: cardName, loading, meta }),
+    [hoverIn, hoverOut, img, cardName, loading, meta],
+  );
 
   return (
     <Ctx.Provider value={value}>{children}</Ctx.Provider>

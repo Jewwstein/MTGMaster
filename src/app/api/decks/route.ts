@@ -21,38 +21,79 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getServerSession(authOptions);
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  let ownerId: string | null = null;
+  try {
+    const session = await getServerSession(authOptions);
+    ownerId = (session?.user as { id?: string } | undefined)?.id ?? null;
+  } catch (error) {
+    console.warn("getServerSession failed in POST /api/decks", error);
   }
 
   try {
+    if (!ownerId) {
+      const guest = await prisma.user.upsert({
+        where: { username: "guest" },
+        update: {},
+        create: {
+          username: "guest",
+          name: "Guest",
+        },
+      });
+      ownerId = guest.id;
+    }
+
     const body = await request.json();
     const name = typeof body?.name === "string" && body.name.trim().length > 0 ? body.name.trim() : "Untitled Deck";
     const entries = Array.isArray(body?.entries) ? body.entries : [];
+    const sanitized = entries
+      .filter((entry: any) => typeof entry?.name === "string" && entry.name.trim())
+      .map((entry: any) => {
+        const rawImage = typeof entry?.image === "string" ? entry.image.trim() : "";
+        return {
+          name: entry.name.trim(),
+          quantity: Math.max(1, typeof entry?.count === "number" && Number.isFinite(entry.count) ? entry.count : 1),
+          isCommander: !!entry?.commander,
+          image: rawImage.length > 0 ? rawImage : null,
+        };
+      });
+
+    if (sanitized.length === 0) {
+      return NextResponse.json({ error: "Deck must contain at least one card before saving" }, { status: 400 });
+    }
 
     const deck = await prisma.deck.create({
       data: {
-        ownerId: userId,
+        ownerId: ownerId!,
         name,
-        cards: {
-          createMany: {
-            data: entries
-              .filter((entry: any) => typeof entry?.name === "string" && entry.name.trim())
-              .map((entry: any) => ({
-                name: entry.name.trim(),
-                quantity: typeof entry?.count === "number" ? entry.count : 1,
-                isCommander: !!entry?.commander,
-              })),
-          },
-        },
       },
     });
 
-    return NextResponse.json({ deck }, { status: 201 });
+    if (sanitized.length > 0) {
+      const cardData = sanitized.map((entry: { name: string; quantity: number; isCommander: boolean; image: string | null }) => ({
+        deckId: deck.id,
+        name: entry.name,
+        quantity: entry.quantity,
+        isCommander: entry.isCommander,
+        image: entry.image,
+      }));
+      try {
+        await prisma.deckCard.createMany({
+          data: cardData as any[],
+        });
+      } catch (error) {
+        console.warn("deckCard.createMany failed, falling back to sequential create", error);
+        for (const entry of cardData) {
+          await prisma.deckCard.create({
+            data: entry as any,
+          });
+        }
+      }
+    }
+
+    return NextResponse.json({ deck: { id: deck.id, name: deck.name, updatedAt: deck.updatedAt } }, { status: 201 });
   } catch (error) {
     console.error("POST /api/decks failed", error);
-    return NextResponse.json({ error: "Failed to save deck" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Failed to save deck";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

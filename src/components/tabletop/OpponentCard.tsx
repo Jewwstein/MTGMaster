@@ -43,7 +43,7 @@ async function fetchScryfallImage(name: string): Promise<string | null> {
   return img ?? null;
 }
 
-export default function OpponentCard({ card }: { card: CardItem }) {
+export default function OpponentCard({ card, className, sizeClass = "h-24 w-16" }: { card: CardItem; className?: string; sizeClass?: string }) {
   const preview = usePreview();
   const [img, setImg] = React.useState<string | null>(null);
 
@@ -82,9 +82,15 @@ export default function OpponentCard({ card }: { card: CardItem }) {
 
   return (
     <div
-      className={`relative h-24 w-16 select-none overflow-hidden rounded-md border border-zinc-700 bg-zinc-800 text-[10px] text-zinc-200 shadow ${rotated}`}
+      className={`relative ${sizeClass} select-none overflow-hidden rounded-md border border-zinc-700 bg-zinc-800 text-[10px] text-zinc-200 shadow ${rotated} ${className ?? ""}`}
       style={style}
-      onPointerEnter={() => preview.hoverIn(card.name)}
+      onPointerEnter={() =>
+        preview.hoverIn({
+          name: card.name,
+          counters: typeof card.counters === "number" ? card.counters : null,
+          customText: typeof card.customText === "string" ? card.customText : null,
+        })
+      }
       onPointerLeave={() => preview.hoverOut()}
       title={card.name}
       aria-label={card.name}
